@@ -8,7 +8,9 @@
 #include <sys/types.h> 
 #include <sys/socket.h> 
 #include <netinet/in.h> 
-#include <arpa/inet.h> 
+#include <arpa/inet.h>
+#include <time.h>
+
 #define VERSION 23 
 #define BUFSIZE 8096 
 #define ERROR 42 
@@ -40,6 +42,9 @@ void logger(int type, char *s1, char *s2, int socket_fd)
 {
 	int fd ;
 	char logbuffer[BUFSIZE*2];
+	time_t now;
+	struct tm *local_time;
+	char timebuffer[BUFSIZE*2];
 	switch (type) 
 	{
 		case ERROR: 
@@ -60,6 +65,11 @@ void logger(int type, char *s1, char *s2, int socket_fd)
 	/* No checks here, nothing can be done with a failure anyway */
 	if((fd = open("webserver.log", O_CREAT| O_WRONLY | O_APPEND,0644)) >= 0) 
 	{
+		time(&now);
+		/*convert to local time*/
+		local_time = localtime(&now);
+		(void)sprintf(timebuffer,"%s ", asctime(local_time));
+		(void)write(fd,timebuffer,strlen(timebuffer));
 		(void)write(fd,logbuffer,strlen(logbuffer)); 
 		(void)write(fd,"\n",1);
 		(void)close(fd);
@@ -182,23 +192,26 @@ int main(int argc, char **argv)
 	(void)signal(SIGHUP, SIG_IGN); /* ignore terminal hangups */ 
 	for(i=0;i<32;i++)
 		(void)close(i); /* close open files */
-		(void)setpgrp(); /* break away from process group */ 
-		logger(LOG,"nweb starting",argv[1],getpid());
-		/* setup the network socket */
-		if((listenfd = socket(AF_INET, SOCK_STREAM,0)) <0)
-			logger(ERROR, "system call","socket",0); port = atoi(argv[1]);
-		if(port < 0 || port >60000)
-			logger(ERROR,"Invalid port number (try 1->60000)",argv[1],0); 
-		serv_addr.sin_family = AF_INET;
-		serv_addr.sin_addr.s_addr = htonl(INADDR_ANY); 
-		serv_addr.sin_port = htons(port);
-		if(bind(listenfd, (struct sockaddr *)&serv_addr,sizeof(serv_addr)) <0) logger(ERROR,"system call","bind",0);
-		if( listen(listenfd,64) <0) logger(ERROR,"system call","listen",0);
-		for(hit=1; ;hit++) 
-		{
-			length = sizeof(cli_addr);
-			if((socketfd = accept(listenfd, (struct sockaddr *)&cli_addr, &length)) < 0)	     
-				      logger(ERROR,"system call","accept",0);
-			web(socketfd,hit); /* never returns */ 
-		}
+	(void)setpgrp(); /* break away from process group */ 
+	logger(LOG,"nweb starting",argv[1],getpid());
+	/* setup the network socket */
+	if((listenfd = socket(AF_INET, SOCK_STREAM,0)) <0)
+		logger(ERROR, "system call","socket",0);
+	port = atoi(argv[1]);
+	if(port < 0 || port >60000)
+		logger(ERROR,"Invalid port number (try 1->60000)",argv[1],0); 
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY); 
+	serv_addr.sin_port = htons(port);
+	if(bind(listenfd, (struct sockaddr *)&serv_addr,sizeof(serv_addr)) <0) 
+		logger(ERROR,"system call","bind",0);
+	if( listen(listenfd,64) <0) 
+		logger(ERROR,"system call","listen",0);
+	for(hit=1; ;hit++) 
+	{
+		length = sizeof(cli_addr);
+		if((socketfd = accept(listenfd, (struct sockaddr *)&cli_addr, &length)) < 0)	     
+			      logger(ERROR,"system call","accept",0);
+		web(socketfd,hit); /* never returns */ 
+	}
 }
