@@ -148,8 +148,8 @@ void web(int fd, int hit)
 	{
 		(void)write(fd,buffer,ret); 
 	}  
-	   sleep(1); /* allow socket to drain before signalling the socket is closed */
-	   close(fd); 
+	sleep(1); /* allow socket to drain before signalling the socket is closed */
+	close(fd); 
 }
 
 int main(int argc, char **argv) 
@@ -158,6 +158,7 @@ int main(int argc, char **argv)
 	socklen_t length;
 	static struct sockaddr_in cli_addr; /* static = initialised to zeros */ 
 	static struct sockaddr_in serv_addr; /* static = initialised to zeros */
+	pid_t pid;
 	if( argc < 3 || argc > 3 || !strcmp(argv[1], "-?") ) 
 	{
 		(void)printf("hint: nweb Port-Number Top-Directory\t\tversion %d\n\n"
@@ -211,7 +212,18 @@ int main(int argc, char **argv)
 	{
 		length = sizeof(cli_addr);
 		if((socketfd = accept(listenfd, (struct sockaddr *)&cli_addr, &length)) < 0)	     
-			      logger(ERROR,"system call","accept",0);
-		web(socketfd,hit); /* never returns */ 
+			logger(ERROR,"system call","accept",0);
+		pid = fork();
+		if (pid < 0) /*fork failed*/
+		{
+			logger(ERROR,"system call","fork",0);
+			exit(-1);
+		}
+		else if (!pid) /*child process*/
+		{
+			web(socketfd,hit); /* never returns */
+			kill(getpid(), SIGKILL); /*kill the child process*/
+		}
+		/*parent process continue to wait for request*/
 	}
 }
