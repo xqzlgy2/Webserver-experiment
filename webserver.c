@@ -10,6 +10,9 @@
 #include <netinet/in.h> 
 #include <arpa/inet.h>
 #include <time.h>
+#include <semaphore.h>
+#include <sys/mman.h>
+#include <sys/time.h>
 
 #define VERSION 23 
 #define BUFSIZE 8096 
@@ -152,6 +155,36 @@ void web(int fd, int hit)
 	close(fd); 
 }
 
+void stat_service(sem_t* psem, void* memptr, int socketfd, int hit)
+{
+	int tfd, i;
+	clock_t start, end;
+	double total;
+	char timebuffer[BUFSIZE];
+	/*start timing*/
+	start = clock();
+	web(socketfd,hit);	/* service the client */
+	end = clock();
+	sem_wait(psem); /*P operation*/
+	((double *)memptr)[hit%BUFSIZE] = (double)(end-start)/CLOCKS_PER_SEC; /*store the time*/
+	/*save shared memory every 100 times*/
+	if (hit % 100 == 0)
+	{
+		tfd = open("child_time.log", O_CREAT| O_WRONLY | O_APPEND,0644);
+		total = 0;
+		for (i = 1; i <= hit; ++i)
+		{
+			total += ((double *)memptr)[i];
+			(void)sprintf(timebuffer,"child%d : %fs\n", i, ((double *)memptr)[i]);
+ 			(void)write(tfd,timebuffer,strlen(timebuffer));
+		}
+		(void)sprintf(timebuffer,"current total:%f\n", total);
+ 		(void)write(tfd,timebuffer,strlen(timebuffer));
+    	(void)close(tfd);
+	}
+	sem_post(psem); /*V operation*/
+}
+
 int main(int argc, char **argv) 
 {
 	int i, port, listenfd, socketfd, hit;
@@ -159,6 +192,9 @@ int main(int argc, char **argv)
 	static struct sockaddr_in cli_addr; /* static = initialised to zeros */ 
 	static struct sockaddr_in serv_addr; /* static = initialised to zeros */
 	pid_t pid;
+	sem_t* psem;
+	int shm_fd;
+	void* memptr;
 	if( argc < 3 || argc > 3 || !strcmp(argv[1], "-?") ) 
 	{
 		(void)printf("hint: nweb Port-Number Top-Directory\t\tversion %d\n\n"
@@ -206,8 +242,31 @@ int main(int argc, char **argv)
 	serv_addr.sin_port = htons(port);
 	if(bind(listenfd, (struct sockaddr *)&serv_addr,sizeof(serv_addr)) <0) 
 		logger(ERROR,"system call","bind",0);
-	if( listen(listenfd,64) <0) 
+	if( listen(listenfd,1024) <0) 
 		logger(ERROR,"system call","listen",0);
+
+	/*create semaphore*/
+	if ((psem = sem_open("sem", O_CREAT, 0666, 1)) == SEM_FAILED)
+	{
+		logger(ERROR,"system call","semaphore",0);
+		exit(-1);
+	}
+	/*create shared memory*/
+	if ((shm_fd = shm_open("mmap", O_RDWR|O_CREAT, 0666)) < 0)
+	{
+		logger(ERROR,"system call","shared memory",0);
+		exit(-1);
+	}
+	/*set the size of the shared object*/
+	ftruncate(shm_fd, sizeof(double)*BUFSIZE);
+	/*map the shared object to memory*/
+	memptr = mmap(NULL, sizeof(double)*BUFSIZE, PROT_READ|PROT_WRITE,MAP_SHARED,shm_fd,0);
+	if (memptr == MAP_FAILED)
+	{
+		logger(ERROR,"system call","map",0);
+		exit(-1);
+	}
+
 	for(hit=1; ;hit++) 
 	{
 		length = sizeof(cli_addr);
@@ -221,9 +280,10 @@ int main(int argc, char **argv)
 		}
 		else if (!pid) /*child process*/
 		{
-			web(socketfd,hit); /* never returns */
+			stat_service(psem, memptr, socketfd, hit);
 			kill(getpid(), SIGKILL); /*kill the child process*/
 		}
 		/*parent process continue to wait for request*/
+		close(socketfd);
 	}
 }
